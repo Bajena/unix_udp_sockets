@@ -22,18 +22,18 @@ Rozwiazanie zadania z socket'ow udp
 #define MAXTRY 5
 #define MINTIME (-MAXTRY*2-1)
 
+#define BUFFER_SIZE 512
+
 volatile sig_atomic_t alrm=0;
 
 struct message {
-      int type;
+      char type;
       char text[20];
 };
 
 struct message2 {
       int type;
       char *text;
-
-
 };
 
 struct order {
@@ -80,19 +80,23 @@ void update_time(struct order ot[]){
  * Datagramy sa wysylane i odbierane atomowo do wymiaru MTU
  */
 
-// short recv_datagram(int sock, char **buffer){
-// 	char buf[500];
-// 	int len;
-//       struct sockaddr_in addr;
-//       socklen_t addrlen = sizeof(addr);            /* length of addresses */
-// 	if((len = TEMP_FAILURE_RETRY(recvfrom(sock,buf,500,0,(struct sockaddr*) &addr,&addrlen)))<1)
-// 		ERR("recvfrom");
-
-//        buf[len] = '\0';
-//        fprintf(stderr,"Dlugosc:%d , wiadomosc: %s , od: %s:%d\n",len,buf,inet_ntoa(addr.sin_addr) , addr.sin_port);
-//        *buffer = buf;
-// 	return len;
-// }
+short recv_datagram(int sock, char **buffer){
+	char buf[BUFFER_SIZE];
+	int len;
+      struct sockaddr_in addr;
+      socklen_t addrlen = sizeof(addr);
+      struct message2 *wiadomosc;
+	if((len = TEMP_FAILURE_RETRY(recvfrom(sock,buf,BUFFER_SIZE,0,(struct sockaddr*) &addr,&addrlen)))<1)
+		ERR("recvfrom");
+       buf[len] = '\0';
+      wiadomosc =  (struct message2*)malloc(sizeof(struct message2));
+      wiadomosc->type = buf[0];
+      wiadomosc->text =  (char*)malloc(strlen(buf)-1);
+       strcpy(wiadomosc->text,buf+1);
+       fprintf(stderr,"Dlugosc:%d , typ:%c , wiadomosc: %s , od: %s:%d\n",len,wiadomosc->type,wiadomosc->text,inet_ntoa(addr.sin_addr) , addr.sin_port);
+       *buffer = buf;
+	return len;
+}
 
 // short recv_datagram(int sock, char **buffer){
 //       struct message wiadomosc;
@@ -107,21 +111,6 @@ void update_time(struct order ot[]){
 //        //*buffer = buf;
 //   return len;
 // }
-
-short recv_datagram(int sock, char **buffer){
-      struct message2 wiadomosc;
-      char buf[500];
-      int len;
-      struct sockaddr_in addr;
-      socklen_t addrlen = sizeof(addr);            /* length of addresses */
-  if((len = TEMP_FAILURE_RETRY(recvfrom(sock,buf,500,0,(struct sockaddr*) &addr,&addrlen)))<1)
-    ERR("recvfrom");
-
-       buf[len] = '\0';
-       fprintf(stderr,"Dlugosc:%d , wiadomosc: %s , od: %s:%d\n",len,buf,inet_ntoa(addr.sin_addr) , addr.sin_port);
-       //*buffer = buf;
-  return len;
-}
 
 int send_datagram(int sock,struct sockaddr_in addr,short msg){
 	int status;

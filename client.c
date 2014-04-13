@@ -80,14 +80,39 @@ void usage(char * name){
 // 	return status;
 // }
 
-// int send_datagram(int sock,struct sockaddr_in *addr,char *msg, int length){
+// int send_datagram(int sock,struct sockaddr_in *addr,char *msg){
 //   int status;
 //   fprintf(stderr, "Proba wyslania: %s\n",msg);
-//   status=TEMP_FAILURE_RETRY(sendto(sock,msg,length,0, (struct sockaddr *)addr,sizeof(*addr)));
+//   status=TEMP_FAILURE_RETRY(sendto(sock,msg,strlen(msg),0, (struct sockaddr *)addr,sizeof(*addr)));
 //   if(status<0&&errno!=EPIPE&&errno!=ECONNRESET) ERR("sendto");
 //   return status;
 // }
 
+int send_datagram(int sock,struct sockaddr_in *addr,struct message2 *msg){
+  int status;
+  fprintf(stderr, "Proba wyslania: %s\n",msg->text);
+  char *wiad;
+  wiad = (char*)malloc(strlen(msg->text)+sizeof(msg->type));
+  sprintf(wiad,"%c%s",msg->type,msg->text);
+  status=TEMP_FAILURE_RETRY(sendto(sock,wiad,strlen(wiad),0, (struct sockaddr *)addr,sizeof(*addr)));
+  if(status<0&&errno!=EPIPE&&errno!=ECONNRESET) ERR("sendto");
+  return status;
+}
+
+struct message2* create_message(char type, char *text) {
+     struct message2 *wiadomosc;
+     wiadomosc =  (struct message2*)malloc(sizeof(struct message2));
+     wiadomosc->type = type;
+     wiadomosc->text =  (char*)malloc(strlen(text));
+     strcpy(wiadomosc->text,text);
+
+     return wiadomosc;
+}
+
+void destroy_message(struct message2* msg) {
+  free(msg->text);
+  free(msg);
+}
 // int send_datagram(int sock,struct sockaddr_in *addr,char *msg, int length){
 //   int status;
 //   struct message *wiadomosc;
@@ -104,26 +129,26 @@ void usage(char * name){
 // }
 
 
-int send_datagram(int sock,struct sockaddr_in *addr,char *msg, int length){
-  int status;
-  struct message2 *wiadomosc;
-  wiadomosc =  (struct message2*)malloc(sizeof(struct message2));
-  wiadomosc->text =  (char*)malloc(strlen("abc"));
-  strcpy(wiadomosc->text,"abc");
-  wiadomosc->type = 1;
+// int send_datagram(int sock,struct sockaddr_in *addr,char *msg, int length){
+//   int status;
+//   struct message2 *wiadomosc;
+//   wiadomosc =  (struct message2*)malloc(sizeof(struct message2));
+//   wiadomosc->text =  (char*)malloc(strlen("abc"));
+//   strcpy(wiadomosc->text,"abc");
+//   wiadomosc->type = 1;
 
-  char *wiad = (char*)malloc(sizeof(wiadomosc->type) + strlen(wiadomosc->text));
+//   char *wiad = (char*)malloc(sizeof(wiadomosc->type) + strlen(wiadomosc->text));
 
-  strcpy(wiad,wiadomosc->text);
-  memcpy(wiad+strlen(wiadomosc->text), &wiadomosc->type, sizeof(wiadomosc->type));
-  fprintf(stderr, "Proba wyslania: %s\n",wiad);
-  status=TEMP_FAILURE_RETRY(sendto(sock,(void*)wiad,strlen(wiad),0, (struct sockaddr *)addr,sizeof(*addr)));
-  if(status<0&&errno!=EPIPE&&errno!=ECONNRESET) ERR("sendto");
+//   strcpy(wiad,wiadomosc->text);
+//   memcpy(wiad+strlen(wiadomosc->text), &wiadomosc->type, sizeof(wiadomosc->type));
+//   fprintf(stderr, "Proba wyslania: %s\n",wiad);
+//   status=TEMP_FAILURE_RETRY(sendto(sock,(void*)wiad,strlen(wiad),0, (struct sockaddr *)addr,sizeof(*addr)));
+//   if(status<0&&errno!=EPIPE&&errno!=ECONNRESET) ERR("sendto");
 
-  free(wiadomosc);
-  free(wiad);
-  return status;
-}
+//   free(wiadomosc);
+//   free(wiad);
+//   return status;
+// }
 
 // int send_orders(int sfd,struct order ot[],int otc) {
 // 	int i;
@@ -197,11 +222,13 @@ int send_datagram(int sock,struct sockaddr_in *addr,char *msg, int length){
 
 
 void work(int sfd, struct sockaddr_in *addr) {
-
-  char *msg = "Hello world";
-  if(send_datagram(sfd,addr,msg,strlen(msg))<0){
+  struct message2 *msg;
+  msg = create_message('1', "Message");
+  //char *msg = "1Wiadomosc";
+  if(send_datagram(sfd,addr,msg)<0){
           fprintf(stderr,"Send error\n");
         }
+  destroy_message(msg);
 	// int count=0,confirmed=0;
 	// int errors=0;
 
