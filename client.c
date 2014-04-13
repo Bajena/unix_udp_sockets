@@ -16,23 +16,16 @@ Rozwiazanie zadania z socket'ow udp
 #include <netinet/in.h>
 #include <signal.h>
 #include <netdb.h>
+
+#include "common.h"
+
+
 #define ERR(source) (perror(source),\
 		     fprintf(stderr,"%s:%d\n",__FILE__,__LINE__),\
 		     exit(EXIT_FAILURE))
 #define MAXTRY 3
 #define MAXCONNECTED 10
-
-struct message {
-      int type;
-      char text[20];
-};
-
-struct message2 {
-      int type;
-      char *text;
-
-
-};
+#define BUFFER_SIZE 512
 // struct order {
 // 	short time ;
 // 	struct sockaddr_in addr;
@@ -88,7 +81,25 @@ void usage(char * name){
 //   return status;
 // }
 
-int send_datagram(int sock,struct sockaddr_in *addr,struct message2 *msg){
+struct message* recv_datagram(int sock,struct sockaddr_in *addr){
+  char buf[BUFFER_SIZE];
+  int len;
+  struct message *msg;
+  struct sockaddr_in *addr_clone = (struct sockaddr_in* )malloc(sizeof(struct sockaddr_in ));
+  *addr_clone = *addr;
+  socklen_t addrlen = sizeof(struct sockaddr_in);
+
+  if((len = TEMP_FAILURE_RETRY(recvfrom(sock,buf,BUFFER_SIZE,0,(struct sockaddr*) addr,&addrlen)))<1)
+    ERR("recvfrom");
+       buf[len] = '\0';
+      msg =  create_message(buf[0], buf+1, addr_clone);
+      if (msg!=NULL) {
+       fprintf(stderr,"Dlugosc:%d , wiadomosc: %s , od: %s:%d\n",len,msg->text,inet_ntoa(addr->sin_addr) , addr->sin_port);
+      }
+  return msg;
+}
+
+int send_datagram(int sock,struct sockaddr_in *addr,struct message *msg){
   int status;
   fprintf(stderr, "Proba wyslania: %s\n",msg->text);
   char *wiad;
@@ -96,23 +107,10 @@ int send_datagram(int sock,struct sockaddr_in *addr,struct message2 *msg){
   sprintf(wiad,"%c%s",msg->type,msg->text);
   status=TEMP_FAILURE_RETRY(sendto(sock,wiad,strlen(wiad),0, (struct sockaddr *)addr,sizeof(*addr)));
   if(status<0&&errno!=EPIPE&&errno!=ECONNRESET) ERR("sendto");
+  free(wiad);
   return status;
 }
 
-struct message2* create_message(char type, char *text) {
-     struct message2 *wiadomosc;
-     wiadomosc =  (struct message2*)malloc(sizeof(struct message2));
-     wiadomosc->type = type;
-     wiadomosc->text =  (char*)malloc(strlen(text));
-     strcpy(wiadomosc->text,text);
-
-     return wiadomosc;
-}
-
-void destroy_message(struct message2* msg) {
-  free(msg->text);
-  free(msg);
-}
 // int send_datagram(int sock,struct sockaddr_in *addr,char *msg, int length){
 //   int status;
 //   struct message *wiadomosc;
@@ -222,12 +220,15 @@ void destroy_message(struct message2* msg) {
 
 
 void work(int sfd, struct sockaddr_in *addr) {
-  struct message2 *msg;
-  msg = create_message('1', "Message");
-  //char *msg = "1Wiadomosc";
+  struct message *msg;
+  msg = create_message('0', "Message",NULL);
   if(send_datagram(sfd,addr,msg)<0){
           fprintf(stderr,"Send error\n");
         }
+  destroy_message(msg);
+
+  msg = recv_datagram(sfd, addr);
+
   destroy_message(msg);
 	// int count=0,confirmed=0;
 	// int errors=0;
