@@ -36,10 +36,6 @@ struct player {
       struct sockaddr_in addr;
 };
 
-struct order {
-	short time ;
-	struct sockaddr_in addr;
-};
 
 int sethandler( void (*f)(int), int sigNo) {
 	struct sigaction act;
@@ -71,11 +67,6 @@ void usage(char * name){
 	fprintf(stderr,"USAGE: %s port\n",name);
 }
 
-void update_time(struct order ot[]){
-	int i;
-	for(i=0;i<MAXCONNECTED;i++)
-		if(ot[i].time>MINTIME) ot[i].time--;
-}
 /*
  * Datagramy sa wysylane i odbierane atomowo do wymiaru MTU
  */
@@ -97,14 +88,6 @@ struct message* recv_datagram(int sock){
       }
 	return msg;
 }
-
-// int send_datagram(int sock,struct sockaddr_in addr,short msg){
-// 	int status;
-// 	short buf=htons(msg);
-// 	status=TEMP_FAILURE_RETRY(sendto(sock,&buf,sizeof(short),0,(struct sockaddr*)&addr,sizeof(addr)));
-// 	if(status<0&&errno!=EPIPE&&errno!=ECONNRESET) ERR("sendto");
-// 	return status;
-// }
 
 int send_datagram(int sock,struct player pl, char type,char *text){
   int status;
@@ -133,26 +116,6 @@ void process_datagram(struct message* msg, int sock, struct player players[]){
           //           fprintf(stderr, "Nieznany");
           //           break;
        }
-	// int i ;
-	// int free = -1;
-	// int pos = -1;
-	// for(i=0;i<MAXCONNECTED;i++){
-	// 	if(ot[i].time<=MINTIME) free = i;
-	// 	else if(0==memcmp(&addr,&ot[i].addr,sizeof(struct sockaddr_in))) pos=i;
-	// }
-	// if(pos!=-1){
-	// 	if(msg>0) {
-	// 		ot[pos].time=msg;
-	// 		if(send_datagram(sock,ot[pos].addr,msg)<0) ot[pos].time=MINTIME;
-	// 	}
-	// 	else ot[pos].time=MINTIME;
-	// }else if(msg>0){
-	// 	if(free!=-1){
-	// 		ot[free].time=msg;
-	// 		ot[free].addr=addr;
-	// 		if(send_datagram(sock,ot[free].addr,msg)<0) ot[free].time=MINTIME;
-	// 	}else send_datagram(sock,addr,-1);
-	// }
 }
 
 void process_register_datagram(struct message* msg, int sock, struct player players[]){
