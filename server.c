@@ -14,6 +14,7 @@ Rozwiazanie zadania z socket'ow udp
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #include <signal.h>
 
 #include "common.h"
@@ -67,10 +68,6 @@ void usage(char * name){
 	fprintf(stderr,"USAGE: %s port\n",name);
 }
 
-/*
- * Datagramy sa wysylane i odbierane atomowo do wymiaru MTU
- */
-
 struct message* recv_datagram(int sock){
 	char buf[BUFFER_SIZE];
 	int len;
@@ -84,38 +81,26 @@ struct message* recv_datagram(int sock){
        buf[len] = '\0';
       msg =  create_message(buf[0], buf+1, addr);
       if (msg!=NULL) {
-       fprintf(stderr,"Dlugosc:%d , wiadomosc: %s , od: %s:%d\n",len,msg->text,inet_ntoa(addr->sin_addr) , addr->sin_port);
+       fprintf(stderr,"Dlugosc:%d , wiadomosc: %s , od: %s:%d\n",len,msg->text,inet_ntoa(msg->addr->sin_addr) , msg->addr->sin_port);
       }
 	return msg;
 }
 
-int send_datagram(int sock,struct player pl, char type,char *text){
+int send_datagram(int sock,struct sockaddr_in *addr, char type,char *text){
   int status;
 
-  char *msg;
-  msg = (char*)malloc(strlen(text)+sizeof(type));
+  char msg[BUFFER_SIZE];
   sprintf(msg,"%c%s",type,text);
 
-  status=TEMP_FAILURE_RETRY(sendto(sock,msg,strlen(msg),0,(struct sockaddr*)&(pl.addr),sizeof(pl.addr)));
+  status=TEMP_FAILURE_RETRY(sendto(sock,msg,strlen(msg),0,(struct sockaddr*)addr,sizeof(*addr)));
   if(status<0&&errno!=EPIPE&&errno!=ECONNRESET) ERR("sendto");
-  free(msg);
   return status;
 }
 
-void process_datagram(struct message* msg, int sock, struct player players[]){
 
-       switch(msg->type){
-          case '0':
-                    fprintf(stderr,"Rejestracja:%s\n",msg->text);
-                    process_register_datagram(msg,sock,players);
-                    break;
-          case '1':
-                    fprintf(stderr,"Rozwiazanie:%s\n",msg->text);
-                    break;
-          // case default:
-          //           fprintf(stderr, "Nieznany");
-          //           break;
-       }
+void register_player(struct player players[], int id, struct message* msg) {
+    players[id].registered = 1;
+    players[id].addr = *(msg->addr);
 }
 
 void process_register_datagram(struct message* msg, int sock, struct player players[]){
@@ -128,24 +113,28 @@ void process_register_datagram(struct message* msg, int sock, struct player play
       if (!players[i].registered) {
         register_player(players,i,msg);
         fprintf(stderr, "Zarejestrowano gracza nr.%d\n",i+1);
-        if (send_datagram(sock,players[i], '2' ,"Zarejestrowano")<0) ERR("Send");
+        if (send_datagram(sock,&players[i].addr, '0' ,"Zarejestrowano")<0) ERR("Send");
         return;
       }
     }
 
 }
+void process_datagram(struct message* msg, int sock, struct player players[]){
 
-void register_player(struct player players[], int id, struct message* msg) {
-    players[id].registered = 1;
-    players[id].addr = *(msg->addr);
+       switch(msg->type){
+          case '0':
+                    fprintf(stderr,"Rejestracja:%s\n",msg->text);
+                    process_register_datagram(msg,sock,players);
+                    break;
+          case '2':
+                    fprintf(stderr,"Rozwiazanie:%s\n",msg->text);
+                    break;
+          // case default:
+          //           fprintf(stderr, "Nieznany");
+          //           break;
+       }
 }
 
-// void process_orders(struct order ot[],int sock){
-// 	int i;
-// 	for(i=0;i<MAXCONNECTED;i++)
-// 		if(ot[i].time<=0&&ot[i].time>MINTIME&&0==ot[i].time%2)
-// 				send_datagram(sock,ot[i].addr,0);
-// }
 
 void work(int sfd) {
 

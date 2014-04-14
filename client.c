@@ -14,6 +14,7 @@ Rozwiazanie zadania z socket'ow udp
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #include <signal.h>
 #include <netdb.h>
 
@@ -23,9 +24,24 @@ Rozwiazanie zadania z socket'ow udp
 #define ERR(source) (perror(source),\
 		     fprintf(stderr,"%s:%d\n",__FILE__,__LINE__),\
 		     exit(EXIT_FAILURE))
-#define MAXTRY 3
+#define MAX_ATTEMPTS 3
 #define MAXCONNECTED 10
 #define BUFFER_SIZE 512
+
+volatile sig_atomic_t alrm=0;
+
+void sig_alrm(int i){
+  alrm=1;
+}
+
+int sethandler( void (*f)(int), int sigNo) {
+  struct sigaction act;
+  memset(&act, 0, sizeof(struct sigaction));
+  act.sa_handler = f;
+  if (-1==sigaction(sigNo, &act, NULL))
+    return -1;
+  return 0;
+}
 
 int make_socket(void){
 	int sock;
@@ -49,49 +65,74 @@ void usage(char * name){
 	fprintf(stderr,"USAGE: %s address port",name);
 }
 
+int send_datagram(int sock,struct sockaddr_in *addr, char type, char* text){
+  int status;
+  char wiad[BUFFER_SIZE];
+  fprintf(stderr, "Proba wyslania: %s\n",text);
+  sprintf(wiad,"%c%s",type,text);
+  status=TEMP_FAILURE_RETRY(sendto(sock,wiad,strlen(wiad),0, (struct sockaddr *)addr,sizeof(*addr)));
+  if(status<0&&errno!=EPIPE&&errno!=ECONNRESET) ERR("sendto");
+  return status;
+}
+
+void register_player(int sock, struct sockaddr_in *addr) {
+    int attempts = 0;
+    char recv_buffer[BUFFER_SIZE];
+    sigset_t mask, oldmask;
+    struct itimerval tv={{1,0},{1,0}};
+
+    sigemptyset (&mask);
+    sigaddset (&mask, SIGALRM);
+    sigprocmask (SIG_BLOCK, &mask, &oldmask);
+
+    for (attempts = 0; attempts< MAX_ATTEMPTS; attempts++) {
+          setitimer(ITIMER_REAL,&tv,NULL);
+          if(send_datagram(sock,addr,'0', "Register")<0){
+                fprintf(stderr,"Send error\n");
+          }
+          if (recv(sock,recv_buffer,BUFFER_SIZE,0)<0){
+              if(EINTR!=errno)ERR("recv:");
+              if(alrm) {
+                alrm = 0;
+                continue;
+              }
+        }
+        break;
+    }
+    fprintf(stderr, "Zarejestrowano pomyslnie\n" );
+    sigprocmask (SIG_UNBLOCK, &mask, NULL);
+}
+
+
 struct message* recv_datagram(int sock,struct sockaddr_in *addr){
   char buf[BUFFER_SIZE];
   int len;
   struct message *msg;
-  struct sockaddr_in *addr_clone = (struct sockaddr_in* )malloc(sizeof(struct sockaddr_in ));
-  *addr_clone = *addr;
   socklen_t addrlen = sizeof(struct sockaddr_in);
 
   if((len = TEMP_FAILURE_RETRY(recvfrom(sock,buf,BUFFER_SIZE,0,(struct sockaddr*) addr,&addrlen)))<1)
     ERR("recvfrom");
-       buf[len] = '\0';
-      msg =  create_message(buf[0], buf+1, addr_clone);
+      buf[len] = '\0';
+      msg =  (struct message*)create_message(buf[0], buf+1, addr);
       if (msg!=NULL) {
-       fprintf(stderr,"Dlugosc:%d , wiadomosc: %s , od: %s:%d\n",len,msg->text,inet_ntoa(addr->sin_addr) , addr->sin_port);
+       fprintf(stderr,"Dlugosc:%d , wiadomosc: %s , od: %s:%d\n",len,msg->text, (char*)inet_ntoa(msg->addr->sin_addr) , msg->addr->sin_port);
       }
   return msg;
 }
 
-int send_datagram(int sock,struct sockaddr_in *addr,struct message *msg){
-  int status;
-  fprintf(stderr, "Proba wyslania: %s\n",msg->text);
-  char *wiad;
-  wiad = (char*)malloc(strlen(msg->text)+sizeof(msg->type));
-  sprintf(wiad,"%c%s",msg->type,msg->text);
-  status=TEMP_FAILURE_RETRY(sendto(sock,wiad,strlen(wiad),0, (struct sockaddr *)addr,sizeof(*addr)));
-  if(status<0&&errno!=EPIPE&&errno!=ECONNRESET) ERR("sendto");
-  free(wiad);
-  return status;
-}
 
 void work(int sfd, struct sockaddr_in *addr) {
-  struct message *msg;
-  msg = create_message('0', "Message",NULL);
-  if(send_datagram(sfd,addr,msg)<0){
-          fprintf(stderr,"Send error\n");
-        }
-  destroy_message(msg);
+    register_player(sfd,addr);
+ //  struct message *msg;
+ //  if(send_datagram(sfd,addr,'0', "Message")<0){
+ //          fprintf(stderr,"Send error\n");
+ //  }
 
-  msg = recv_datagram(sfd, addr);
+ //  msg = recv_datagram(sfd, addr);
 
-  destroy_message(msg);
+ //  destroy_message(msg);
 
-	printf("\n");
+	// printf("\n");
 }
 
 int main(int argc, char** argv) {
@@ -105,6 +146,7 @@ int main(int argc, char** argv) {
 
        addr = make_address(argv[1],(short)atoi(argv[2]));
 
+       if(sethandler(sig_alrm,SIGALRM)) ERR("Seting SIGALRM:");
        work(sock, &addr);
 	if(TEMP_FAILURE_RETRY(close(sock))<0)ERR("close");
 	return EXIT_SUCCESS;
