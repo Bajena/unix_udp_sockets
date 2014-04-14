@@ -5,6 +5,7 @@
 #include "common.h"
 
 struct message* create_message(char type, char *text, struct sockaddr_in *addr) {
+     if (strlen(text) == 0) return NULL;
      struct message *msg;
      struct sockaddr_in *addr_clone;
      msg =  (struct message*)malloc(sizeof(struct message));
