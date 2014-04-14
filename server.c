@@ -1,9 +1,3 @@
-/*******************************************************************************
-
-Rozwiazanie zadania z socket'ow udp
-								Marcin Borkowski
-********************************************************************************/
-
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,7 +10,7 @@ Rozwiazanie zadania z socket'ow udp
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <signal.h>
-
+#include <time.h>
 #include "common.h"
 
 #define ERR(source) (perror(source),\
@@ -36,7 +30,6 @@ struct player {
       int registered;
       struct sockaddr_in addr;
 };
-
 
 int sethandler( void (*f)(int), int sigNo) {
 	struct sigaction act;
@@ -103,7 +96,21 @@ void register_player(struct player players[], int id, struct message* msg) {
     players[id].addr = *(msg->addr);
 }
 
+int get_player_id(struct player players[], struct sockaddr_in *addr) {
+  int i;
+  for (i = 0;i<2;i++) {
+    if (players[i].addr.sin_port==addr->sin_port) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 void process_register_datagram(struct message* msg, int sock, struct player players[]){
+    if (get_player_id(players,msg->addr)!=-1) {
+      fprintf(stderr, "Gracz juz sie zarejestrowal\n");
+      return;
+    }
     if (players[0].registered && players[1].registered) {
        fprintf(stderr, "Zarejestrowano juz dwoch graczy!\n");
        return;
@@ -126,7 +133,7 @@ void process_datagram(struct message* msg, int sock, struct player players[]){
                     fprintf(stderr,"Rejestracja:%s\n",msg->text);
                     process_register_datagram(msg,sock,players);
                     break;
-          case '2':
+          case '1':
                     fprintf(stderr,"Rozwiazanie:%s\n",msg->text);
                     break;
           // case default:
@@ -135,75 +142,92 @@ void process_datagram(struct message* msg, int sock, struct player players[]){
        }
 }
 
-
-void work(int sfd) {
-
-	fd_set base_rfds, rfds ;
+void wait_for_players(int sfd, struct player players[]) {
+      fd_set base_rfds, rfds ;
       int fd_count;
       FD_ZERO(&base_rfds);
       FD_SET(sfd, &base_rfds);
 
       struct message *in_msg;
-      struct player players[2];
 
       for (;;) {
           rfds = base_rfds;
           fd_count = pselect(sfd+1,&rfds, NULL,NULL,NULL,NULL);
-
           if (fd_count<0) {
-            if (errno==EINTR) {
-
-            } else ERR("SELECT");
+            if (errno!=EINTR)  ERR("SELECT");
           } else {
+
               in_msg = recv_datagram(sfd);
               process_datagram(in_msg,sfd, players);
               destroy_message(in_msg);
+
+              if (players[0].registered && players[1].registered) {
+                  return;
+              }
           }
       }
-	// int ile;
-	// short msg;
-	// struct sockaddr_in addr;
-	// sigset_t mask, oldmask;
-	// struct order ot[MAXCONNECTED];
-	// struct itimerval tv={{1,0},{1,0}};
+}
 
-	// memset(ot,0xF0,sizeof(ot));
-	// sigemptyset (&mask);
-	// sigaddset (&mask, SIGALRM);
-	// setitimer(ITIMER_REAL,&tv,NULL);
-	// FD_ZERO(&base_rfds);
-	// FD_SET(sfd, &base_rfds);
-	// sigprocmask (SIG_BLOCK, &mask, &oldmask);
-	// for(;;){
-	// 	rfds=base_rfds;
-	// 	ile=pselect(sfd+1,&rfds,NULL,NULL,NULL,&oldmask);
-	// 	if(ile<0){
-	// 		if(EINTR==errno){
-	// 			if(alrm) {
-	// 				update_time(ot);
-	// 				alrm=0;
-	// 			}else continue;
-	// 		}else ERR("select");
-	// 	}else {
-	// 		msg=recv_datagram(sfd,&addr);
-	// 		process_datagram(msg,addr,ot,sfd);
-	// 	}
-	// 	process_orders(ot,sfd);
-	// }
-	// sigprocmask (SIG_UNBLOCK, &mask, NULL);
+int game_result(struct player players[], int points_to_win) {
+   int i;
+   for (i = 0;i<2;i++) {
+      if (players[i].points == points_to_win)
+        return i;
+   }
+   return -1;
+}
 
+void prepare_task(char *task, int task_length) {
+  int i;
+  int digit;
+  for (i = 0;i<task_length;i++) {
+    digit = rand()%10;
+    task[i] = (char)(((int)'0')+digit);
+  }
+}
+
+void send_task(int sfd, int task_length, struct player players[]) {
+  int i;
+  char task[task_length];
+  prepare_task(task, task_length);
+  struct message *in_msg;
+
+  fprintf(stderr, "Task: %s\n",task);
+  for (i = 0;i<2;i++) {
+    send_datagram(sfd, &players[i].addr, '1', task);
+  }
+  in_msg = recv_datagram(sfd);
+  fprintf(stderr,"Gracz %d przyslal rozwiazanie: %s\n",  get_player_id(players,in_msg->addr), in_msg->text);
+  destroy_message(in_msg);
+}
+
+void work(int sfd, int task_length, int points_to_win) {
+    struct player players[2];
+
+    wait_for_players(sfd, players);
+    while (game_result(players, points_to_win) < 0) {
+        send_task(sfd, task_length, players);
+        break;
+    }
 }
 
 int main(int argc, char** argv) {
 	int sock ;
+      int task_length;
+      int points_to_win;
+
 	if(argc!=4) {
 		usage(argv[0]);
 		return EXIT_FAILURE;
 	}
+
+      srand(time(NULL));
+      task_length = atoi(argv[2]);
+      points_to_win = atoi(argv[3]);
 	sock=make_socket(atoi(argv[1]));
 	if(sethandler(sig_alrm,SIGALRM)) ERR("Seting SIGALRM:");
 
-	work(sock);
+	work(sock, task_length,points_to_win);
 	if(TEMP_FAILURE_RETRY(close(sock))<0)ERR("close");
 	return EXIT_SUCCESS;
 }

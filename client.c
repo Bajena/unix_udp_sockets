@@ -1,9 +1,3 @@
-/*******************************************************************************
-
-Rozwiazanie zadania z socket'ow udp
-								Marcin Borkowski
-********************************************************************************/
-
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,13 +19,14 @@ Rozwiazanie zadania z socket'ow udp
 		     fprintf(stderr,"%s:%d\n",__FILE__,__LINE__),\
 		     exit(EXIT_FAILURE))
 #define MAX_ATTEMPTS 3
+#define CONFIRM_TIME 500000
 #define MAXCONNECTED 10
 #define BUFFER_SIZE 512
 
-volatile sig_atomic_t alrm=0;
+volatile sig_atomic_t last_signal=0;
 
 void sig_alrm(int i){
-  alrm=1;
+  last_signal=i;
 }
 
 int sethandler( void (*f)(int), int sigNo) {
@@ -75,34 +70,36 @@ int send_datagram(int sock,struct sockaddr_in *addr, char type, char* text){
   return status;
 }
 
-void register_player(int sock, struct sockaddr_in *addr) {
+int send_and_confirm(int sock, struct sockaddr_in *addr, char type, char* text) {
     int attempts = 0;
     char recv_buffer[BUFFER_SIZE];
-    sigset_t mask, oldmask;
-    struct itimerval tv={{1,0},{1,0}};
+    //sigset_t mask, oldmask;
+    struct itimerval tv;
+    memset(&tv, 0, sizeof(struct itimerval));
+    tv.it_value.tv_usec=CONFIRM_TIME;
 
-    sigemptyset (&mask);
-    sigaddset (&mask, SIGALRM);
-    sigprocmask (SIG_BLOCK, &mask, &oldmask);
+    //sigemptyset (&mask);
+    //sigaddset (&mask, SIGALRM);
+    //sigprocmask (SIG_BLOCK, &mask, &oldmask);
 
     for (attempts = 0; attempts< MAX_ATTEMPTS; attempts++) {
+          last_signal = 0;
           setitimer(ITIMER_REAL,&tv,NULL);
-          if(send_datagram(sock,addr,'0', "Register")<0){
+          if(send_datagram(sock,addr,type, text)<0){
                 fprintf(stderr,"Send error\n");
           }
           if (recv(sock,recv_buffer,BUFFER_SIZE,0)<0){
               if(EINTR!=errno)ERR("recv:");
-              if(alrm) {
-                alrm = 0;
+              if(last_signal==SIGALRM) {
+                fprintf(stderr, "Timeout, wysylam ponownie\n");
                 continue;
               }
         }
-        break;
+        return 0;
     }
-    fprintf(stderr, "Zarejestrowano pomyslnie\n" );
-    sigprocmask (SIG_UNBLOCK, &mask, NULL);
+    return -1;
+    //sigprocmask (SIG_UNBLOCK, &mask, NULL);
 }
-
 
 struct message* recv_datagram(int sock,struct sockaddr_in *addr){
   char buf[BUFFER_SIZE];
@@ -120,9 +117,52 @@ struct message* recv_datagram(int sock,struct sockaddr_in *addr){
   return msg;
 }
 
+void register_player(int sock, struct sockaddr_in *addr) {
+    if (send_and_confirm(sock, addr, '0', "Rejestracja") < 0) ERR("Send and confirm");
+    fprintf(stderr, "Zarejestrowano pomyslnie\n" );
+}
+
+int solve_task(char *task) {
+  int i;
+  int sum = 0;
+  for (i = 0;i<strlen(task);i++) {
+    sum += (int)(task[i] - '0');
+  }
+
+  return sum;
+}
+
+int get_digit_count(int number) {
+    int length = 1;
+    while ((number /= 10) >= 1)
+        length++;
+    return length;
+}
+
+void play(int sfd,struct sockaddr_in *addr) {
+    struct message *in_msg;
+    int result;
+    char *result_string;
+    for (;;) {
+      in_msg = recv_datagram(sfd, addr);
+      if (in_msg->type == '1') {
+        fprintf(stderr,"Zadanie: %s\n", in_msg->text);
+        result = solve_task(in_msg->text);
+
+        result_string = (char*)malloc(get_digit_count(result));
+        sprintf(result_string,"%d",result);
+        fprintf(stderr, "Rozwiazanie: %s\n", result_string);
+        free(result_string);
+      }
+      destroy_message(in_msg);
+    }
+}
+
+
 
 void work(int sfd, struct sockaddr_in *addr) {
     register_player(sfd,addr);
+    play(sfd,addr);
  //  struct message *msg;
  //  if(send_datagram(sfd,addr,'0', "Message")<0){
  //          fprintf(stderr,"Send error\n");
