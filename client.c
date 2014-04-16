@@ -15,24 +15,14 @@
 
 #include "common.h"
 
-#define ERR(source) (perror(source),\
-				 fprintf(stderr,"%s:%d\n",__FILE__,__LINE__),\
-				 exit(EXIT_FAILURE))
-#define MAX_ATTEMPTS 3
-#define CONFIRM_TIME 500000
-#define BUFFER_SIZE 512
+
+#define MIN_WAITTIME 1500000000
+#define MAX_WAITTIME 2000000000
 
 volatile sig_atomic_t last_signal=0;
 
 void sig_alrm(int i){
 	last_signal=i;
-}
-
-int make_socket(void){
-	int sock;
-	sock = socket(PF_INET,SOCK_DGRAM,0);
-	if(sock < 0) ERR("socket");
-	return sock;
 }
 
 struct sockaddr_in make_address(char *address, int port){
@@ -50,21 +40,13 @@ void usage(char * name){
 	fprintf(stderr,"USAGE: %s ADDRESS PORT",name);
 }
 
-void sleep_nanoseconds(int seconds,unsigned long nanoseconds)
+void sleep_nanoseconds(unsigned long nanoseconds)
 {
-	struct timespec tt, t = {seconds,nanoseconds};
+			unsigned long nsec = nanoseconds / 1000000000;
+			unsigned long nnanosec = nanoseconds % 1000000000;
+	struct timespec tt, t = {nsec,nnanosec};
 	for (tt = t;nanosleep(&tt,&tt);)
 		if (errno!=EINTR) ERR("nanosleep:");
-}
-
-int send_datagram(int sock,struct sockaddr_in *addr, char type, char* text){
-	int status;
-	char wiad[BUFFER_SIZE];
-      snprintf(wiad,BUFFER_SIZE,"%c%s",type,text);
-
-	status=TEMP_FAILURE_RETRY(sendto(sock,wiad,strlen(wiad),0, (struct sockaddr *)addr,sizeof(*addr)));
-	if(status<0&&errno!=EPIPE&&errno!=ECONNRESET) ERR("sendto");
-	return status;
 }
 
 int send_and_confirm(int sock, struct sockaddr_in *addr, char type, char* text) {
@@ -90,21 +72,8 @@ int send_and_confirm(int sock, struct sockaddr_in *addr, char type, char* text) 
 	return -1;
 }
 
-struct message* recv_datagram(int sock,struct sockaddr_in *addr){
-	char buf[BUFFER_SIZE];
-	int len;
-	struct message *msg;
-	socklen_t addrlen = sizeof(struct sockaddr_in);
-
-	if((len = TEMP_FAILURE_RETRY(recvfrom(sock,buf,BUFFER_SIZE,0,(struct sockaddr*) addr,&addrlen)))<1)
-		ERR("recvfrom");
-		buf[len] = '\0';
-		msg =  (struct message*)create_message(buf[0], buf+1, addr);
-	return msg;
-}
-
 void register_player(int sock, struct sockaddr_in *addr) {
-		if (send_and_confirm(sock, addr, '0', "Rejestracja") < 0) ERR("Send and confirm");
+		if (send_and_confirm(sock, addr, REGISTER_MESSAGE, "Rejestracja") < 0) ERR("Send and confirm");
 		fprintf(stderr, "Zarejestrowano pomyslnie\n" );
 }
 
@@ -120,20 +89,20 @@ int play(int sfd,struct sockaddr_in *addr) {
 	int result;
 	char result_string[BUFFER_SIZE];
 	for (;;) {
-		in_msg = recv_datagram(sfd, addr);
+		in_msg = recv_datagram(sfd);
 		if (in_msg==NULL) continue;
 
-		if (in_msg->type == '1') {
-			sleep_nanoseconds(rand()%2, rand()%500000000 + 500000000);
+		if (in_msg->type == TASK_MESSAGE) {
+			sleep_nanoseconds(MIN_WAITTIME + rand()%(MAX_WAITTIME - MIN_WAITTIME));
 			fprintf(stderr,"Zadanie: %s\n", in_msg->text);
 			result = solve_task(in_msg->text);
-                   snprintf(result_string,BUFFER_SIZE,"%d",result);
+									 snprintf(result_string,BUFFER_SIZE,"%d",result);
 			fprintf(stderr, "Rozwiazanie: %s\n", result_string);
 			if (send_and_confirm(sfd,addr,'1',result_string) < 0) {
 				fprintf(stderr, "Nie udalo sie wyslac rozwiazania. Wychodze...\n");
 				ERR("send_and_confirm");
 			}
-		} else if (in_msg->type=='3') {
+		} else if (in_msg->type==END_MESSAGE) {
 			if (strcmp(in_msg->text, "WIN")==0) return 1;
 			else return -1;
 		}
@@ -148,7 +117,7 @@ void work(int sfd, struct sockaddr_in *addr) {
 	if (result==1) fprintf(stderr, "Wygrana\n");
 	else fprintf(stderr, "Przegrana\n" );
 
-	send_datagram(sfd,addr,'3', "Done");
+	send_datagram(sfd,addr, END_MESSAGE, "Received result");
 }
 
 int main(int argc, char** argv) {
