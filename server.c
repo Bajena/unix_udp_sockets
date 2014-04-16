@@ -8,7 +8,6 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <netinet/in.h>
-#include <arpa/inet.h>
 #include <signal.h>
 #include <time.h>
 
@@ -37,7 +36,7 @@ int bind_socket(int port){
 	addr.sin_port = htons (port);
 	addr.sin_addr.s_addr = htonl (INADDR_ANY);
 	if(bind(sock,(struct sockaddr*) &addr,sizeof(struct sockaddr_in)) < 0) ERR("bind");
-	fprintf(stderr, "Serwer uruchomiony...\n",inet_ntoa(addr.sin_addr));
+	fprintf(stderr, "Serwer uruchomiony...\n");
 	return sock;
 }
 
@@ -147,12 +146,12 @@ int play_round(int sfd, int task_length, struct player players[]) {// -1 - nikt 
 			else return 0;
 		}
 		player_id = get_player_id(players,in_msg->addr);
-		if (players[player_id].sent_answer==1) {
+		if (players[player_id].sent_answer==1) { //Jesli ten gracz przeslal juz odpowiedz - ignoruj
 			destroy_message(in_msg);
 			continue;
 		}
 		fprintf(stderr,"Gracz %d przyslal rozwiazanie: %s\n",  player_id + 1, in_msg->text);
-		if (!point_given && current_solution==atoi(in_msg->text))  {
+		if (!point_given && current_solution==atoi(in_msg->text))  { //Przyznaj punkt jesli wynik poprawny
 			players[player_id].points++;
 			point_given = 1;
 		}
@@ -190,7 +189,7 @@ void work(int sfd, int task_length, int points_to_win) {
 	while ((winner = game_result(players, points_to_win)) < 0) {
 		if (play_round(sfd, task_length, players) < 0)  {
 			fprintf(stderr,"Brak odpowiedzi - koniec gry.\n");
-			ERR("play_round");
+			exit(EXIT_FAILURE);
 		}
 		fprintf(stderr, "Wynik - Gracz 1: %d Gracz2: %d\n", players[0].points, players[1].points);
 	}

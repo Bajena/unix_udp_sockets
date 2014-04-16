@@ -9,7 +9,6 @@
 #include <sys/time.h>
 #include <time.h>
 #include <netinet/in.h>
-#include <arpa/inet.h>
 #include <signal.h>
 #include <netdb.h>
 
