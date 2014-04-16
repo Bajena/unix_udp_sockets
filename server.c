@@ -44,15 +44,18 @@ void sig_alrm_task(int i) {
 }
 
 int make_socket(int port){
-	struct sockaddr_in name;
+	struct sockaddr_in addr;
 	int sock;
+	int t = 1;
 	sock = socket(PF_INET,SOCK_DGRAM,0);
 	if(sock < 0) ERR("socket");
-	name.sin_family = AF_INET;
-	name.sin_port = htons (port);
-	name.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
-	if(bind(sock,(struct sockaddr*) &name,sizeof(name)) < 0) ERR("bind");
-	fprintf(stderr, "Serwer pracuje pod adresem:%s\n",inet_ntoa(name.sin_addr));
+	memset(&addr, 0, sizeof(struct sockaddr_in));
+	addr.sin_family = AF_INET;
+	addr.sin_port = htons (port);
+	addr.sin_addr.s_addr = htonl (INADDR_ANY);
+	if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,&t, sizeof(t))) ERR("setsockopt");
+	if(bind(sock,(struct sockaddr*) &addr,sizeof(struct sockaddr_in)) < 0) ERR("bind");
+	fprintf(stderr, "Serwer pracuje pod adresem:%s\n",inet_ntoa(addr.sin_addr));
 	return sock;
 }
 
@@ -79,9 +82,8 @@ struct message* recv_datagram(int sock){
 
 int send_datagram(int sock,struct sockaddr_in *addr, char type,char *text){
 	int status;
-
 	char msg[BUFFER_SIZE];
-	sprintf(msg,"%c%s",type,text);
+      snprintf(msg,BUFFER_SIZE,"%c%s",type,text);
 
 	status=TEMP_FAILURE_RETRY(sendto(sock,msg,strlen(msg),0,(struct sockaddr*)addr,sizeof(*addr)));
 	if(status<0&&errno!=EPIPE&&errno!=ECONNRESET) ERR("sendto");
@@ -148,27 +150,16 @@ int process_register_datagram(struct message* msg, int sock, struct player playe
 }
 
 void wait_for_players(int sfd, struct player players[]) {
-	fd_set base_rfds, rfds ;
-	int fd_count;
-	FD_ZERO(&base_rfds);
-	FD_SET(sfd, &base_rfds);
-
 	struct message *in_msg;
 	int registered_players = 0;
 
 	while(registered_players < PLAYERS_COUNT) {
-		rfds = base_rfds;
-		fd_count = pselect(sfd+1,&rfds, NULL,NULL,NULL,NULL);
-		if (fd_count<0) {
-			if (errno!=EINTR)  ERR("SELECT");
-		} else {
-			in_msg = recv_datagram(sfd);
-			if (in_msg->type=='0') {
-				fprintf(stderr,"Rejestracja:%s\n",in_msg->text);
-				registered_players += process_register_datagram(in_msg,sfd,players);
-			}
-			destroy_message(in_msg);
+		in_msg = recv_datagram(sfd);
+		if (in_msg->type=='0') {
+			fprintf(stderr,"Rejestracja:%s\n",in_msg->text);
+			registered_players += process_register_datagram(in_msg,sfd,players);
 		}
+		destroy_message(in_msg);
 	}
 }
 
@@ -189,6 +180,7 @@ void prepare_task(char *task, int task_length) {
 		digit = rand()%10;
 		task[i] = (char)(((int)'0')+digit);
 	}
+	task[i] = '\0';
 }
 
 //0 - nieprawidlowe | 1 - prawidlowe
@@ -199,7 +191,7 @@ int check_solution(int solution, int sent_solution) {
 // -1 - nikt nie przyslal rozwiazania | 0 - przynajmniej jeden gracz przyslal rozwiazanie
 int play_round(int sfd, int task_length, struct player players[]) {
 	int i;
-	char task[task_length];
+	char task[task_length+1];
 	struct message *in_msg;
 	int player_id = -1;
 	int current_solution;
@@ -251,10 +243,8 @@ void send_game_result(int sfd, struct player players[], int winner) {
 
 	for (i = 0;i<PLAYERS_COUNT;i++) {
 		fprintf(stderr, "Wysylam podsumowanie do gracza: %d\n", i+1);
-		if (i==winner)
-			send_result = send_and_confirm(sfd, &players[i].addr, '3', "WIN");
-		else
-			send_result = send_and_confirm(sfd,&players[i].addr, '3', "LOSE");
+		if (i==winner) send_result = send_and_confirm(sfd, &players[i].addr, '3', "WIN");
+		else send_result = send_and_confirm(sfd,&players[i].addr, '3', "LOSE");
 
 		if (send_result < 0) fprintf(stderr, "Wysylanie nie powiodlo sie\n");
 	}

@@ -60,7 +60,8 @@ void sleep_nanoseconds(int seconds,unsigned long nanoseconds)
 int send_datagram(int sock,struct sockaddr_in *addr, char type, char* text){
 	int status;
 	char wiad[BUFFER_SIZE];
-	sprintf(wiad,"%c%s",type,text);
+      snprintf(wiad,BUFFER_SIZE,"%c%s",type,text);
+
 	status=TEMP_FAILURE_RETRY(sendto(sock,wiad,strlen(wiad),0, (struct sockaddr *)addr,sizeof(*addr)));
 	if(status<0&&errno!=EPIPE&&errno!=ECONNRESET) ERR("sendto");
 	return status;
@@ -117,7 +118,7 @@ int get_digit_count(int number) {
 int play(int sfd,struct sockaddr_in *addr) {
 	struct message *in_msg;
 	int result;
-	char *result_string;
+	char result_string[BUFFER_SIZE];
 	for (;;) {
 		in_msg = recv_datagram(sfd, addr);
 		if (in_msg==NULL) continue;
@@ -126,8 +127,7 @@ int play(int sfd,struct sockaddr_in *addr) {
 			sleep_nanoseconds(rand()%2, rand()%500000000 + 500000000);
 			fprintf(stderr,"Zadanie: %s\n", in_msg->text);
 			result = solve_task(in_msg->text);
-			result_string = (char*)malloc(get_digit_count(result));
-			sprintf(result_string,"%d",result);
+                   snprintf(result_string,BUFFER_SIZE,"%d",result);
 			fprintf(stderr, "Rozwiazanie: %s\n", result_string);
 			if (send_and_confirm(sfd,addr,'1',result_string) < 0) {
 				fprintf(stderr, "Nie udalo sie wyslac rozwiazania. Wychodze...\n");
