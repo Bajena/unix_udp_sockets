@@ -15,7 +15,6 @@
 
 #include "common.h"
 
-
 #define ERR(source) (perror(source),\
 				 fprintf(stderr,"%s:%d\n",__FILE__,__LINE__),\
 				 exit(EXIT_FAILURE))
@@ -27,15 +26,6 @@ volatile sig_atomic_t last_signal=0;
 
 void sig_alrm(int i){
 	last_signal=i;
-}
-
-int sethandler( void (*f)(int), int sigNo) {
-	struct sigaction act;
-	memset(&act, 0, sizeof(struct sigaction));
-	act.sa_handler = f;
-	if (-1==sigaction(sigNo, &act, NULL))
-		return -1;
-	return 0;
 }
 
 int make_socket(void){
@@ -57,7 +47,7 @@ struct sockaddr_in make_address(char *address, int port){
 }
 
 void usage(char * name){
-	fprintf(stderr,"USAGE: %s address port",name);
+	fprintf(stderr,"USAGE: %s ADDRESS PORT",name);
 }
 
 void sleep_nanoseconds(int seconds,unsigned long nanoseconds)
@@ -70,7 +60,6 @@ void sleep_nanoseconds(int seconds,unsigned long nanoseconds)
 int send_datagram(int sock,struct sockaddr_in *addr, char type, char* text){
 	int status;
 	char wiad[BUFFER_SIZE];
-	fprintf(stderr, "Proba wyslania: %s\n",text);
 	sprintf(wiad,"%c%s",type,text);
 	status=TEMP_FAILURE_RETRY(sendto(sock,wiad,strlen(wiad),0, (struct sockaddr *)addr,sizeof(*addr)));
 	if(status<0&&errno!=EPIPE&&errno!=ECONNRESET) ERR("sendto");
@@ -78,34 +67,26 @@ int send_datagram(int sock,struct sockaddr_in *addr, char type, char* text){
 }
 
 int send_and_confirm(int sock, struct sockaddr_in *addr, char type, char* text) {
-		int attempts = 0;
-		char recv_buffer[BUFFER_SIZE];
-		//sigset_t mask, oldmask;
-		struct itimerval tv;
-		memset(&tv, 0, sizeof(struct itimerval));
-		tv.it_value.tv_usec=CONFIRM_TIME;
+	int attempts = 0;
+	int confirm_len = 0;
+	char recv_buffer[BUFFER_SIZE];
 
-		//sigemptyset (&mask);
-		//sigaddset (&mask, SIGALRM);
-		//sigprocmask (SIG_BLOCK, &mask, &oldmask);
-
-		for (attempts = 0; attempts< MAX_ATTEMPTS; attempts++) {
-					last_signal = 0;
-					setitimer(ITIMER_REAL,&tv,NULL);
-					if(send_datagram(sock,addr,type, text)<0){
-								fprintf(stderr,"Send error\n");
-					}
-					if (recv(sock,recv_buffer,BUFFER_SIZE,0)<0){
-							if(EINTR!=errno)ERR("recv:");
-							if(last_signal==SIGALRM) {
-								fprintf(stderr, "Timeout, wysylam ponownie\n");
-								continue;
-							}
-				}
-				return 0;
+	for (attempts = 0; attempts< MAX_ATTEMPTS; attempts++) {
+		last_signal = 0;
+		set_alarm(0,CONFIRM_TIME);
+		if(send_datagram(sock,addr,type, text)<0){
+					fprintf(stderr,"Send error\n");
 		}
-		return -1;
-		//sigprocmask (SIG_UNBLOCK, &mask, NULL);
+		if ((confirm_len = recv(sock,recv_buffer,BUFFER_SIZE,0))<0){
+			if(EINTR!=errno)ERR("recv:");
+			if(last_signal==SIGALRM) {
+				fprintf(stderr, "Timeout, wysylam ponownie\n");
+				continue;
+			}
+		}
+		return 0;
+	}
+	return -1;
 }
 
 struct message* recv_datagram(int sock,struct sockaddr_in *addr){
@@ -118,25 +99,12 @@ struct message* recv_datagram(int sock,struct sockaddr_in *addr){
 		ERR("recvfrom");
 		buf[len] = '\0';
 		msg =  (struct message*)create_message(buf[0], buf+1, addr);
-		if (msg!=NULL) {
-			fprintf(stderr,"Dlugosc:%d , wiadomosc: %s , od: %s:%d\n",len,msg->text, (char*)inet_ntoa(msg->addr->sin_addr) , msg->addr->sin_port);
-		}
 	return msg;
 }
 
 void register_player(int sock, struct sockaddr_in *addr) {
 		if (send_and_confirm(sock, addr, '0', "Rejestracja") < 0) ERR("Send and confirm");
 		fprintf(stderr, "Zarejestrowano pomyslnie\n" );
-}
-
-int solve_task(char *task) {
-	int i;
-	int sum = 0;
-	for (i = 0;i<strlen(task);i++) {
-		sum += (int)(task[i] - '0');
-	}
-
-	return sum;
 }
 
 int get_digit_count(int number) {
@@ -152,14 +120,19 @@ int play(int sfd,struct sockaddr_in *addr) {
 	char *result_string;
 	for (;;) {
 		in_msg = recv_datagram(sfd, addr);
+		if (in_msg==NULL) continue;
+
 		if (in_msg->type == '1') {
-			sleep_nanoseconds(rand()%3, rand()%500000000 + 500000000);
+			sleep_nanoseconds(rand()%2, rand()%500000000 + 500000000);
 			fprintf(stderr,"Zadanie: %s\n", in_msg->text);
 			result = solve_task(in_msg->text);
 			result_string = (char*)malloc(get_digit_count(result));
 			sprintf(result_string,"%d",result);
 			fprintf(stderr, "Rozwiazanie: %s\n", result_string);
-			send_and_confirm(sfd,addr,'1',result_string);
+			if (send_and_confirm(sfd,addr,'1',result_string) < 0) {
+				fprintf(stderr, "Nie udalo sie wyslac rozwiazania. Wychodze...\n");
+				ERR("send_and_confirm");
+			}
 		} else if (in_msg->type=='3') {
 			if (strcmp(in_msg->text, "WIN")==0) return 1;
 			else return -1;

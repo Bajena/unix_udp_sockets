@@ -19,9 +19,12 @@
 #define BUFFER_SIZE 512
 #define MAX_ATTEMPTS 3
 #define CONFIRM_TIME 500000
+#define TASK_TIME 5
+#define PLAYERS_COUNT 2
 
 volatile sig_atomic_t last_signal=0;
-
+volatile sig_atomic_t recv_timeout=0;
+volatile sig_atomic_t task_timeout=0;
 
 struct player {
 	int points;
@@ -30,17 +33,14 @@ struct player {
 	struct sockaddr_in addr;
 };
 
-int sethandler( void (*f)(int), int sigNo) {
-	struct sigaction act;
-	memset(&act, 0, sizeof(struct sigaction));
-	act.sa_handler = f;
-	if (-1==sigaction(sigNo, &act, NULL))
-		return -1;
-	return 0;
+void sig_alrm_recv(int i){
+	last_signal=i;
+	recv_timeout = 1;
 }
 
-void sig_alrm(int i){
+void sig_alrm_task(int i) {
 	last_signal=i;
+	task_timeout = 1;
 }
 
 int make_socket(int port){
@@ -52,12 +52,12 @@ int make_socket(int port){
 	name.sin_port = htons (port);
 	name.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
 	if(bind(sock,(struct sockaddr*) &name,sizeof(name)) < 0) ERR("bind");
-	fprintf(stderr, "Serwer stoi pod adresem:%s\n",inet_ntoa(name.sin_addr));
+	fprintf(stderr, "Serwer pracuje pod adresem:%s\n",inet_ntoa(name.sin_addr));
 	return sock;
 }
 
 void usage(char * name){
-	fprintf(stderr,"USAGE: %s port\n",name);
+	fprintf(stderr,"USAGE: %s PORT LENGTH POINTS_TO_WIN \n",name);
 }
 
 struct message* recv_datagram(int sock){
@@ -68,12 +68,12 @@ struct message* recv_datagram(int sock){
 	socklen_t addrlen = sizeof(struct sockaddr_in);
 
 	addr = (struct sockaddr_in*)malloc(sizeof(struct sockaddr_in));
-	if((len = TEMP_FAILURE_RETRY(recvfrom(sock,buf,BUFFER_SIZE,0,(struct sockaddr*) addr,&addrlen)))<1) ERR("recvfrom");
+	if((len = recvfrom(sock,buf,BUFFER_SIZE,0,(struct sockaddr*) addr,&addrlen))<0) {
+		if(EINTR!=errno)ERR("recvfrom");
+	}
 	buf[len] = '\0';
 	msg =  create_message(buf[0], buf+1, addr);
-	if (msg!=NULL) {
-		fprintf(stderr,"Dlugosc:%d , wiadomosc: %s , od: %s:%d\n",len,msg->text,inet_ntoa(msg->addr->sin_addr) , msg->addr->sin_port);
-	}
+
 	return msg;
 }
 
@@ -88,31 +88,29 @@ int send_datagram(int sock,struct sockaddr_in *addr, char type,char *text){
 	return status;
 }
 int send_and_confirm(int sock, struct sockaddr_in *addr, char type, char* text) {
-		int attempts = 0;
-		char recv_buffer[BUFFER_SIZE];
-		struct itimerval tv;
-		memset(&tv, 0, sizeof(struct itimerval));
-		tv.it_value.tv_usec=CONFIRM_TIME;
+	int attempts = 0;
+	char recv_buffer[BUFFER_SIZE];
 
-		for (attempts = 0; attempts< MAX_ATTEMPTS; attempts++) {
-					last_signal = 0;
-					setitimer(ITIMER_REAL,&tv,NULL);
-					if(send_datagram(sock,addr,type, text)<0){
-								fprintf(stderr,"Send error\n");
-					}
-					if (recv(sock,recv_buffer,BUFFER_SIZE,0)<0){
-						if(EINTR!=errno)ERR("recv:");
-						if(last_signal==SIGALRM) {
-							fprintf(stderr, "Timeout, wysylam ponownie\n");
-							continue;
-					}
-				}
-				return 0;
+	if(sethandler(sig_alrm_recv,SIGALRM)) ERR("Seting SIGALRM:");
+	for (attempts = 0; attempts< MAX_ATTEMPTS; attempts++) {
+		last_signal = 0;
+		recv_timeout  = 0;
+		set_alarm(0,CONFIRM_TIME);
+		if(send_datagram(sock,addr,type, text)<0){
+			fprintf(stderr,"Błąd wysyłania, probuję ponownie...\n");
+			continue;
 		}
-		return -1;
+		if (recv(sock,recv_buffer,BUFFER_SIZE,0)<0){
+			if(EINTR!=errno)ERR("recv:");
+			if(last_signal==SIGALRM && recv_timeout == 1) {
+				fprintf(stderr, "Timeout, wysylam ponownie\n");
+				continue;
+			}
+		}
+		return 0;
+	}
+	return -1;
 }
-
-
 
 void register_player(struct player players[], int id, struct message* msg) {
 	players[id].registered = 1;
@@ -121,7 +119,7 @@ void register_player(struct player players[], int id, struct message* msg) {
 
 int get_player_id(struct player players[], struct sockaddr_in *addr) {
 	int i;
-	for (i = 0;i<2;i++) {
+	for (i = 0;i<PLAYERS_COUNT;i++) {
 		if (players[i].addr.sin_port==addr->sin_port) {
 			return i;
 		}
@@ -129,39 +127,24 @@ int get_player_id(struct player players[], struct sockaddr_in *addr) {
 	return -1;
 }
 
-void process_register_datagram(struct message* msg, int sock, struct player players[]){
+int process_register_datagram(struct message* msg, int sock, struct player players[]){
+	int i;
 	if (get_player_id(players,msg->addr)!=-1) {
 		fprintf(stderr, "Gracz juz sie zarejestrowal\n");
-		return;
+		return 0;
 	}
-	if (players[0].registered && players[1].registered) {
-		 fprintf(stderr, "Zarejestrowano juz dwoch graczy!\n");
-		 return;
-	}
-	int i;
-	for (i = 0;i<2;i++) {
-		if (!players[i].registered) {
+
+	for (i = 0;i<PLAYERS_COUNT;i++) {
+		if (players[i].registered==0) {
 			register_player(players,i,msg);
 			fprintf(stderr, "Zarejestrowano gracza nr.%d\n",i+1);
 			if (send_datagram(sock,&players[i].addr, '0' ,"Zarejestrowano")<0) ERR("Send");
-			return;
+			return 1;
 		}
 	}
-}
 
-void process_datagram(struct message* msg, int sock, struct player players[]){
-	 switch(msg->type){
-			case '0':
-					fprintf(stderr,"Rejestracja:%s\n",msg->text);
-					process_register_datagram(msg,sock,players);
-					break;
-			case '1':
-					fprintf(stderr,"Rozwiazanie:%s\n",msg->text);
-					break;
-			// case default:
-			//           fprintf(stderr, "Nieznany");
-			//           break;
-	 }
+	fprintf(stderr, "Zarejestrowano juz wymagana liczbe graczy!\n");
+	return 0;
 }
 
 void wait_for_players(int sfd, struct player players[]) {
@@ -171,8 +154,9 @@ void wait_for_players(int sfd, struct player players[]) {
 	FD_SET(sfd, &base_rfds);
 
 	struct message *in_msg;
+	int registered_players = 0;
 
-	for (;;) {
+	while(registered_players < PLAYERS_COUNT) {
 		rfds = base_rfds;
 		fd_count = pselect(sfd+1,&rfds, NULL,NULL,NULL,NULL);
 		if (fd_count<0) {
@@ -181,20 +165,17 @@ void wait_for_players(int sfd, struct player players[]) {
 			in_msg = recv_datagram(sfd);
 			if (in_msg->type=='0') {
 				fprintf(stderr,"Rejestracja:%s\n",in_msg->text);
-				process_register_datagram(in_msg,sfd,players);
+				registered_players += process_register_datagram(in_msg,sfd,players);
 			}
 			destroy_message(in_msg);
-
-			if (players[0].registered && players[1].registered) {
-				return;
-			}
 		}
 	}
 }
 
+// -1 - gra nieskonczona | i - numer zwyciezcy
 int game_result(struct player players[], int points_to_win) {
 	 int i;
-	 for (i = 0;i<2;i++) {
+	 for (i = 0;i<PLAYERS_COUNT;i++) {
 			if (players[i].points == points_to_win)
 				return i;
 	 }
@@ -210,50 +191,102 @@ void prepare_task(char *task, int task_length) {
 	}
 }
 
-void play_round(int sfd, int task_length, struct player players[]) {
+//0 - nieprawidlowe | 1 - prawidlowe
+int check_solution(int solution, int sent_solution) {
+	return solution== sent_solution ? 1 : 0;
+}
+
+// -1 - nikt nie przyslal rozwiazania | 0 - przynajmniej jeden gracz przyslal rozwiazanie
+int play_round(int sfd, int task_length, struct player players[]) {
 	int i;
 	char task[task_length];
-	prepare_task(task, task_length);
 	struct message *in_msg;
 	int player_id = -1;
+	int current_solution;
+	int point_given = 0;
 
-	fprintf(stderr, "Task: %s\n",task);
-	for (i = 0;i<2;i++) {
+	prepare_task(task, task_length);
+	current_solution = solve_task(task);
+	fprintf(stderr, "Zadanie: %s , rozwiazanie:%d\n",task, current_solution);
+
+	if(sethandler(sig_alrm_task,SIGALRM)) ERR("Seting SIGALRM:");
+	task_timeout = 0;
+	last_signal = 0;
+	set_alarm(TASK_TIME,0);
+
+	for (i = 0;i<PLAYERS_COUNT;i++) {
 		players[i].sent_answer = 0;
 		send_datagram(sfd, &players[i].addr, '1', task);
 	}
-	for (i = 0;i<2;) {
+	for (i = 0;i<PLAYERS_COUNT;) {
 		in_msg = recv_datagram(sfd);
+
+		if ((in_msg==NULL || in_msg->type!='1') && last_signal==SIGALRM && task_timeout==1) {
+			if (i == 0) return -1;
+			else return 0;
+		}
+
 		player_id = get_player_id(players,in_msg->addr);
 		if (players[player_id].sent_answer==1) {
 			destroy_message(in_msg);
 			continue;
 		}
 		fprintf(stderr,"Gracz %d przyslal rozwiazanie: %s\n",  player_id + 1, in_msg->text);
-		if (i==0) players[player_id].points++;
+		if (!point_given && check_solution(current_solution, atoi(in_msg->text)))  {
+			players[player_id].points++;
+			point_given = 1;
+		}
+		send_datagram(sfd, &players[player_id].addr, '2', "Odebrano rozwiazanie");
 		destroy_message(in_msg);
-		send_datagram(sfd, &players[i].addr, '2', "ok");
 		players[player_id].sent_answer = 1;
 		i++;
+	}
+
+	cancel_alarm();
+	return 0;
+}
+void send_game_result(int sfd, struct player players[], int winner) {
+	int send_result;
+	int i;
+
+	for (i = 0;i<PLAYERS_COUNT;i++) {
+		fprintf(stderr, "Wysylam podsumowanie do gracza: %d\n", i+1);
+		if (i==winner)
+			send_result = send_and_confirm(sfd, &players[i].addr, '3', "WIN");
+		else
+			send_result = send_and_confirm(sfd,&players[i].addr, '3', "LOSE");
+
+		if (send_result < 0) fprintf(stderr, "Wysylanie nie powiodlo sie\n");
 	}
 }
 
 void work(int sfd, int task_length, int points_to_win) {
-		struct player players[2];
-		int winner = -1;
-		wait_for_players(sfd, players);
-		while ((winner = game_result(players, points_to_win)) < 0) {
-				play_round(sfd, task_length, players);
-				fprintf(stderr, "Gracz 1: %d Gracz2: %d\n", players[0].points, players[1].points);
+	struct player players[PLAYERS_COUNT];
+	int winner = -1;
+	int i;
+
+	for (i = 0;i<PLAYERS_COUNT;i++) {
+		players[i].registered = 0;
+		players[i].points = 0;
+	}
+
+	wait_for_players(sfd, players);
+	while ((winner = game_result(players, points_to_win)) < 0) {
+		if (play_round(sfd, task_length, players) < 0)  {
+			fprintf(stderr,"Brak odpowiedzi - koniec gry.\n");
+			ERR("play_round");
 		}
-		send_and_confirm(sfd, &players[winner].addr, '3', "WIN");
-		send_and_confirm(sfd, &players[winner == 0 ? 1 : 0].addr, '3', "LOSE");
+		fprintf(stderr, "Wynik - Gracz 1: %d Gracz2: %d\n", players[0].points, players[1].points);
+	}
+
+	send_game_result(sfd,players,winner);
+	fprintf(stderr, "***KONIEC\n");
 }
 
 int main(int argc, char** argv) {
 	int sock ;
-			int task_length;
-			int points_to_win;
+	int task_length;
+	int points_to_win;
 
 	if(argc!=4) {
 		usage(argv[0]);
@@ -264,9 +297,9 @@ int main(int argc, char** argv) {
 	task_length = atoi(argv[2]);
 	points_to_win = atoi(argv[3]);
 	sock=make_socket(atoi(argv[1]));
-	if(sethandler(sig_alrm,SIGALRM)) ERR("Seting SIGALRM:");
 
 	work(sock, task_length,points_to_win);
+
 	if(TEMP_FAILURE_RETRY(close(sock))<0)ERR("close");
 	return EXIT_SUCCESS;
 }
