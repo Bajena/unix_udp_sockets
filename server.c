@@ -37,7 +37,7 @@ int bind_socket(int port){
 	addr.sin_port = htons (port);
 	addr.sin_addr.s_addr = htonl (INADDR_ANY);
 	if(bind(sock,(struct sockaddr*) &addr,sizeof(struct sockaddr_in)) < 0) ERR("bind");
-	fprintf(stderr, "Serwer pracuje pod adresem:%s\n",inet_ntoa(addr.sin_addr));
+	fprintf(stderr, "Serwer uruchomiony...\n",inet_ntoa(addr.sin_addr));
 	return sock;
 }
 
